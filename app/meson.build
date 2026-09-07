@@ -24,6 +24,7 @@ src = [
     'src/keyboard_sdk.c',
     'src/mouse_capture.c',
     'src/mouse_sdk.c',
+    'src/nav_bar.c',
     'src/opengl.c',
     'src/options.c',
     'src/packet_merger.c',
@@ -204,6 +205,28 @@ install_data('data/scrcpy.png',
              install_dir: datadir / 'icons/hicolor/256x256/apps')
 install_data('data/disconnected.png',
              install_dir: datadir / 'icons/hicolor/256x256/apps')
+install_data('data/nav/nav_home.png',
+             install_dir: datadir / 'scrcpy/nav')
+install_data('data/nav/nav_back.png',
+             install_dir: datadir / 'scrcpy/nav')
+install_data('data/nav/nav_recents.png',
+             install_dir: datadir / 'scrcpy/nav')
+install_data('data/nav/nav_power.png',
+             install_dir: datadir / 'scrcpy/nav')
+install_data('data/nav/nav_volume_up.png',
+             install_dir: datadir / 'scrcpy/nav')
+install_data('data/nav/nav_volume_down.png',
+             install_dir: datadir / 'scrcpy/nav')
+install_data('data/nav/nav_screen_off.png',
+             install_dir: datadir / 'scrcpy/nav')
+install_data('data/nav/nav_screen_on.png',
+             install_dir: datadir / 'scrcpy/nav')
+install_data('data/nav/nav_rotate_device.png',
+             install_dir: datadir / 'scrcpy/nav')
+install_data('data/nav/nav_rotate_left.png',
+             install_dir: datadir / 'scrcpy/nav')
+install_data('data/nav/nav_rotate_right.png',
+             install_dir: datadir / 'scrcpy/nav')
 install_data('data/zsh-completion/_scrcpy',
              install_dir: datadir / 'zsh/site-functions')
 install_data('data/bash-completion/scrcpy',

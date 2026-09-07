@@ -782,6 +782,8 @@ aoa_complete:
             .mipmaps = options->mipmaps,
             .fullscreen = options->fullscreen,
             .start_fps_counter = options->start_fps_counter,
+            .nav_bar = options->nav_bar && options->control
+                    && options->video_playback,
         };
 
         if (!sc_screen_init(&s->screen, &screen_params)) {

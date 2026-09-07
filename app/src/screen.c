@@ -14,12 +14,26 @@
 
 #define DOWNCAST(SINK) container_of(SINK, struct sc_screen, frame_sink)
 
+static uint16_t
+get_nav_bar_layout_width(const struct sc_screen *screen) {
+    return sc_nav_bar_get_width(&screen->nav_bar);
+}
+
+static struct sc_size
+get_layout_size(struct sc_size content_size, uint16_t nav_w) {
+    return (struct sc_size) {
+        .width = content_size.width + nav_w,
+        .height = content_size.height,
+    };
+}
+
 static void
 set_aspect_ratio(struct sc_screen *screen, struct sc_size content_size) {
     assert(content_size.width && content_size.height);
 
     if (screen->window_aspect_ratio_lock) {
-        float ar = (float) content_size.width / content_size.height;
+        uint16_t nav_w = get_nav_bar_layout_width(screen);
+        float ar = (float) (content_size.width + nav_w) / content_size.height;
         bool ok = SDL_SetWindowAspectRatio(screen->window, ar, ar);
         if (!ok) {
             LOGW("Could not set window aspect ratio: %s", SDL_GetError());
@@ -69,13 +83,15 @@ get_preferred_display_bounds(struct sc_size *bounds) {
 }
 
 static bool
-is_optimal_size(struct sc_size current_size, struct sc_size content_size) {
+is_optimal_size(struct sc_size current_size, struct sc_size content_size,
+                uint16_t nav_bar_width) {
+    struct sc_size layout_size = get_layout_size(content_size, nav_bar_width);
     // The size is optimal if we can recompute one dimension of the current
     // size from the other
     return current_size.height == (uint32_t) current_size.width
-                                * content_size.height / content_size.width
+                                * layout_size.height / layout_size.width
         || current_size.width == (uint32_t) current_size.height
-                               * content_size.width / content_size.height;
+                               * layout_size.width / layout_size.height;
 }
 
 // return the optimal size of the window, with the following constraints:
@@ -85,8 +101,9 @@ is_optimal_size(struct sc_size current_size, struct sc_size content_size) {
 //  - it scales down to make it fit in the display_size
 static struct sc_size
 get_optimal_size(struct sc_size current_size, struct sc_size content_size,
-                 bool within_display_bounds) {
-    if (content_size.width == 0 || content_size.height == 0) {
+                 uint16_t nav_bar_width, bool within_display_bounds) {
+    struct sc_size layout_size = get_layout_size(content_size, nav_bar_width);
+    if (layout_size.width == 0 || layout_size.height == 0) {
         // avoid division by 0
         return current_size;
     }
@@ -103,21 +120,21 @@ get_optimal_size(struct sc_size current_size, struct sc_size content_size,
         window_size.height = MIN(current_size.height, display_size.height);
     }
 
-    if (is_optimal_size(window_size, content_size)) {
+    if (is_optimal_size(window_size, content_size, nav_bar_width)) {
         return window_size;
     }
 
-    bool keep_width = (uint32_t) content_size.width * window_size.height
-                    > (uint32_t) content_size.height * window_size.width;
+    bool keep_width = (uint32_t) layout_size.width * window_size.height
+                    > (uint32_t) layout_size.height * window_size.width;
     if (keep_width) {
         // remove black borders on top and bottom
-        window_size.height = (uint32_t) content_size.height * window_size.width
-                           / content_size.width;
+        window_size.height = (uint32_t) layout_size.height * window_size.width
+                           / layout_size.width;
     } else {
         // remove black borders on left and right (or none at all if it already
         // fits)
-        window_size.width = (uint32_t) content_size.width * window_size.height
-                          / content_size.height;
+        window_size.width = (uint32_t) layout_size.width * window_size.height
+                          / layout_size.height;
     }
 
     return window_size;
@@ -126,25 +143,27 @@ get_optimal_size(struct sc_size current_size, struct sc_size content_size,
 // initially, there is no current size, so use the frame size as current size
 // req_width and req_height, if not 0, are the sizes requested by the user
 static inline struct sc_size
-get_initial_optimal_size(struct sc_size content_size, uint16_t req_width,
-                         uint16_t req_height) {
+get_initial_optimal_size(struct sc_size content_size, uint16_t nav_bar_width,
+                         uint16_t req_width, uint16_t req_height) {
+    struct sc_size layout_size = get_layout_size(content_size, nav_bar_width);
     struct sc_size window_size;
     if (!req_width && !req_height) {
-        window_size = get_optimal_size(content_size, content_size, true);
+        window_size = get_optimal_size(layout_size, content_size,
+                                       nav_bar_width, true);
     } else {
         if (req_width) {
             window_size.width = req_width;
         } else {
             // compute from the requested height
-            window_size.width = (uint32_t) req_height * content_size.width
-                              / content_size.height;
+            window_size.width = (uint32_t) req_height * layout_size.width
+                              / layout_size.height;
         }
         if (req_height) {
             window_size.height = req_height;
         } else {
             // compute from the requested width
-            window_size.height = (uint32_t) req_width * content_size.height
-                               / content_size.width;
+            window_size.height = (uint32_t) req_width * layout_size.height
+                               / layout_size.width;
         }
     }
     return window_size;
@@ -166,7 +185,10 @@ sc_screen_is_relative_mode(struct sc_screen *screen) {
 static void
 compute_content_rect(struct sc_size window_size, struct sc_size content_size,
                      bool is_icon, enum sc_render_fit render_fit,
-                     SDL_FRect *rect) {
+                     uint16_t nav_bar_width, SDL_FRect *rect) {
+    if (nav_bar_width && window_size.width > nav_bar_width) {
+        window_size.width -= nav_bar_width;
+    }
     if (is_icon) {
         if (content_size.width <= window_size.width
                 && content_size.height <= window_size.height) {
@@ -196,7 +218,13 @@ compute_content_rect(struct sc_size window_size, struct sc_size content_size,
 
     assert(is_icon || render_fit == SC_RENDER_FIT_LETTERBOX);
 
-    if (is_optimal_size(window_size, content_size)) {
+    struct sc_size full_window_size = window_size;
+    full_window_size.width += nav_bar_width;
+
+    if (is_optimal_size(window_size, content_size, 0)
+            || (nav_bar_width
+                && is_optimal_size(full_window_size, content_size,
+                                   nav_bar_width))) {
         rect->x = 0;
         rect->y = 0;
         rect->w = window_size.width;
@@ -227,8 +255,9 @@ sc_screen_update_content_rect(struct sc_screen *screen) {
     bool is_icon = !screen->video || screen->disconnected;
 
     struct sc_size window_size = sc_sdl_get_window_size(screen->window);
+    uint16_t nav_bar_width = sc_nav_bar_get_width(&screen->nav_bar);
     compute_content_rect(window_size, screen->content_size, is_icon,
-                         screen->render_fit, &screen->rect);
+                         screen->render_fit, nav_bar_width, &screen->rect);
 }
 
 // render the texture to the renderer
@@ -304,6 +333,16 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     if (!ok) {
         LOGE("Could not render texture: %s", SDL_GetError());
     }
+
+    struct sc_size window_size = sc_sdl_get_window_size(screen->window);
+    bool interactive = screen->controller && screen->im.kp && !screen->paused;
+    struct sc_nav_bar_bg_color nav_bg = {
+        .r = screen->bg.r,
+        .g = screen->bg.g,
+        .b = screen->bg.b,
+    };
+    sc_nav_bar_render(&screen->nav_bar, window_size.width, window_size.height,
+                      &screen->rect, nav_bg, scale, interactive);
 
 end:
     sc_sdl_render_present(renderer);
@@ -670,6 +709,11 @@ sc_screen_init(struct sc_screen *screen,
 
     sc_input_manager_init(&screen->im, &im_params);
 
+    bool nav_bar = params->nav_bar && params->controller && params->video;
+    if (!sc_nav_bar_init(&screen->nav_bar, screen->renderer, nav_bar)) {
+        goto error_destroy_texture;
+    }
+
     // Initialize even if not used for simplicity
     sc_mouse_capture_init(&screen->mc, screen->window, params->shortcut_mods);
 
@@ -743,13 +787,16 @@ sc_screen_show_initial_window(struct sc_screen *screen) {
         .y = y,
     };
 
+    uint16_t nav_w = get_nav_bar_layout_width(screen);
+    struct sc_size layout_size =
+        get_layout_size(screen->content_size, nav_w);
     struct sc_size window_size =
-        get_initial_optimal_size(screen->content_size, screen->req.width,
-                                                       screen->req.height);
+        get_initial_optimal_size(screen->content_size, nav_w,
+                                 screen->req.width, screen->req.height);
 
     if (screen->flex_display
-            && window_size.width == screen->content_size.width
-            && window_size.height == screen->content_size.height) {
+            && window_size.width == layout_size.width
+            && window_size.height == layout_size.height) {
         // Avoid sending an unnecessary initial "resize display" request to the
         // server if the size has not changed.
         sc_screen_track_resize(screen, window_size);
@@ -800,6 +847,13 @@ sc_screen_join(struct sc_screen *screen) {
 }
 
 void
+sc_screen_redraw(struct sc_screen *screen) {
+    if (screen->window_shown) {
+        sc_screen_render(screen, false);
+    }
+}
+
+void
 sc_screen_destroy(struct sc_screen *screen) {
 #ifndef NDEBUG
     assert(!screen->open);
@@ -807,6 +861,7 @@ sc_screen_destroy(struct sc_screen *screen) {
     if (screen->disconnect_started) {
         sc_disconnect_destroy(&screen->disconnect);
     }
+    sc_nav_bar_destroy(&screen->nav_bar);
     sc_texture_destroy(&screen->tex);
     av_frame_free(&screen->frame);
 #ifdef SC_DISPLAY_FORCE_OPENGL_CORE_PROFILE
@@ -842,16 +897,22 @@ resize_for_content(struct sc_screen *screen, struct sc_size old_content_size,
                    struct sc_size new_content_size) {
     assert(screen->video);
 
-    struct sc_size target_size = new_content_size;
+    uint16_t nav_w = get_nav_bar_layout_width(screen);
+    struct sc_size new_layout_size =
+        get_layout_size(new_content_size, nav_w);
+    struct sc_size target_size = new_layout_size;
     if (!screen->flex_display) {
         struct sc_size window_size = sc_sdl_get_window_size(screen->window);
+        struct sc_size old_layout_size =
+            get_layout_size(old_content_size, nav_w);
         // Scale proportionally
-        target_size.width = (uint32_t) window_size.width * target_size.width
-                          / old_content_size.width;
-        target_size.height = (uint32_t) window_size.height * target_size.height
-                           / old_content_size.height;
+        target_size.width = (uint32_t) window_size.width * new_layout_size.width
+                          / old_layout_size.width;
+        target_size.height = (uint32_t) window_size.height
+                           * new_layout_size.height
+                           / old_layout_size.height;
     }
-    target_size = get_optimal_size(target_size, new_content_size, true);
+    target_size = get_optimal_size(target_size, new_content_size, nav_w, true);
     assert(is_windowed(screen));
     set_aspect_ratio(screen, new_content_size);
     sc_sdl_set_window_size(screen->window, target_size);
@@ -1029,6 +1090,11 @@ sc_screen_toggle_fullscreen(struct sc_screen *screen) {
     }
 
     LOGD("Requested %s mode", req_fullscreen ? "fullscreen" : "windowed");
+    sc_nav_bar_set_visible(&screen->nav_bar, !req_fullscreen);
+    set_aspect_ratio(screen, screen->content_size);
+    if (screen->window_shown) {
+        sc_screen_render(screen, true);
+    }
 }
 
 void
@@ -1046,18 +1112,21 @@ sc_screen_resize_to_fit(struct sc_screen *screen) {
 
     struct sc_size window_size = sc_sdl_get_window_size(screen->window);
 
+    uint16_t nav_w = get_nav_bar_layout_width(screen);
+
     if (screen->render_fit == SC_RENDER_FIT_UNSCALED) {
         struct sc_size content_size = screen->content_size;
+        struct sc_size layout_size = get_layout_size(content_size, nav_w);
         set_aspect_ratio(screen, content_size);
-        sc_sdl_set_window_size(screen->window, content_size);
+        sc_sdl_set_window_size(screen->window, layout_size);
 
         int32_t x_offset = 0;
-        if (content_size.width < window_size.width) {
-            x_offset = (window_size.width - content_size.width) / 2;
+        if (layout_size.width < window_size.width) {
+            x_offset = (window_size.width - layout_size.width) / 2;
         }
         int32_t y_offset = 0;
-        if (content_size.height < window_size.height) {
-            y_offset = (window_size.height - content_size.height) / 2;
+        if (layout_size.height < window_size.height) {
+            y_offset = (window_size.height - layout_size.height) / 2;
         }
         assert(x_offset >= 0 && y_offset >= 0);
         if (x_offset || y_offset) {
@@ -1067,8 +1136,8 @@ sc_screen_resize_to_fit(struct sc_screen *screen) {
             sc_sdl_set_window_position(screen->window, pos);
         }
 
-        LOGD("Resized to content size: %ux%u", content_size.width,
-                                               content_size.height);
+        LOGD("Resized to content size: %ux%u", layout_size.width,
+                                               layout_size.height);
         return;
     }
 
@@ -1077,7 +1146,7 @@ sc_screen_resize_to_fit(struct sc_screen *screen) {
     struct sc_point point = sc_sdl_get_window_position(screen->window);
 
     struct sc_size optimal_size =
-        get_optimal_size(window_size, screen->content_size, false);
+        get_optimal_size(window_size, screen->content_size, nav_w, false);
 
     // Center the window related to the device screen
     assert(optimal_size.width <= window_size.width);
@@ -1103,11 +1172,13 @@ sc_screen_resize_to_pixel_perfect(struct sc_screen *screen) {
         return;
     }
 
+    uint16_t nav_w = get_nav_bar_layout_width(screen);
     struct sc_size content_size = screen->content_size;
+    struct sc_size layout_size = get_layout_size(content_size, nav_w);
     set_aspect_ratio(screen, content_size);
-    sc_sdl_set_window_size(screen->window, content_size);
-    LOGD("Resized to pixel-perfect: %ux%u", content_size.width,
-                                            content_size.height);
+    sc_sdl_set_window_size(screen->window, layout_size);
+    LOGD("Resized to pixel-perfect: %ux%u", layout_size.width,
+                                            layout_size.height);
 }
 
 static void
@@ -1178,10 +1249,15 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
         case SDL_EVENT_WINDOW_ENTER_FULLSCREEN:
             LOGD("Switched to fullscreen mode");
             assert(screen->video);
+            sc_nav_bar_set_visible(&screen->nav_bar, false);
+            set_aspect_ratio(screen, screen->content_size);
+            sc_screen_render(screen, true);
             return;
         case SDL_EVENT_WINDOW_LEAVE_FULLSCREEN:
             LOGD("Switched to windowed mode");
             assert(screen->video);
+            sc_nav_bar_set_visible(&screen->nav_bar, true);
+            set_aspect_ratio(screen, screen->content_size);
             if (is_windowed(screen)) {
                 apply_pending_resize(screen);
                 sc_screen_render(screen, true);

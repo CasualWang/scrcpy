@@ -111,6 +111,8 @@ enum {
     OPT_RENDER_FIT,
     OPT_IGNORE_VIDEO_ENCODER_CONSTRAINTS,
     OPT_NO_TERMINAL_TITLE,
+    OPT_NAV_BAR,
+    OPT_NO_NAV_BAR,
 };
 
 struct sc_option {
@@ -1023,6 +1025,17 @@ static const struct sc_option options[] = {
         .longopt_id = OPT_WINDOW_BORDERLESS,
         .longopt = "window-borderless",
         .text = "Disable window decorations (display borderless window)."
+    },
+    {
+        .longopt_id = OPT_NAV_BAR,
+        .longopt = "nav-bar",
+        .text = "Show the navigation bar on the right side of the window "
+                "(default).",
+    },
+    {
+        .longopt_id = OPT_NO_NAV_BAR,
+        .longopt = "no-nav-bar",
+        .text = "Disable the navigation bar.",
     },
     {
         .longopt_id = OPT_WINDOW_TITLE,
@@ -2944,6 +2957,12 @@ parse_args_with_getopt(struct scrcpy_cli_args *args, int argc, char *argv[],
                 break;
             case OPT_NO_TERMINAL_TITLE:
                 opts->update_terminal_title = false;
+                break;
+            case OPT_NAV_BAR:
+                opts->nav_bar = true;
+                break;
+            case OPT_NO_NAV_BAR:
+                opts->nav_bar = false;
                 break;
             default:
                 // getopt prints the error message on stderr

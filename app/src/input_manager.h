@@ -10,7 +10,10 @@
 
 #include "controller.h"
 #include "file_pusher.h"
+#include "input_events.h"
+#include "nav_bar.h"
 #include "options.h"
+#include "android/keycodes.h"
 #include "trait/gamepad_processor.h"
 #include "trait/key_processor.h"
 #include "trait/mouse_processor.h"
@@ -72,5 +75,14 @@ sc_input_manager_init(struct sc_input_manager *im,
 void
 sc_input_manager_handle_event(struct sc_input_manager *im,
                               const SDL_Event *event);
+
+void
+sc_input_manager_inject_navigation_key(struct sc_input_manager *im,
+                                       enum android_keycode keycode,
+                                       enum sc_action action);
+
+void
+sc_input_manager_trigger_nav_bar_action(struct sc_input_manager *im,
+                                        const struct sc_nav_bar_action *action);
 
 #endif

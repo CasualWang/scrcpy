@@ -9,6 +9,7 @@
 #include "android/keycodes.h"
 #include "events.h"
 #include "input_events.h"
+#include "nav_bar.h"
 #include "screen.h"
 #include "shortcut_mod.h"
 #include "util/log.h"
@@ -104,6 +105,96 @@ action_volume_down(struct sc_input_manager *im, enum sc_action action) {
 static inline void
 action_menu(struct sc_input_manager *im, enum sc_action action) {
     send_keycode(im, AKEYCODE_MENU, action, "MENU");
+}
+
+static void
+press_back_or_turn_screen_on(struct sc_input_manager *im,
+                             enum sc_action action);
+
+static void
+set_display_power(struct sc_input_manager *im, bool on);
+
+static void
+rotate_device(struct sc_input_manager *im);
+
+static void
+apply_orientation_transform(struct sc_input_manager *im,
+                            enum sc_orientation transform);
+
+void
+sc_input_manager_inject_navigation_key(struct sc_input_manager *im,
+                                       enum android_keycode keycode,
+                                       enum sc_action action) {
+    if (!im->controller || im->camera || im->disconnected || im->screen->paused) {
+        return;
+    }
+    if (!im->kp) {
+        return;
+    }
+
+    switch (keycode) {
+        case AKEYCODE_HOME:
+            action_home(im, action);
+            break;
+        case AKEYCODE_BACK:
+            press_back_or_turn_screen_on(im, action);
+            break;
+        case AKEYCODE_APP_SWITCH:
+            action_app_switch(im, action);
+            break;
+        case AKEYCODE_MENU:
+            action_menu(im, action);
+            break;
+        case AKEYCODE_POWER:
+            action_power(im, action);
+            break;
+        case AKEYCODE_VOLUME_UP:
+            action_volume_up(im, action);
+            break;
+        case AKEYCODE_VOLUME_DOWN:
+            action_volume_down(im, action);
+            break;
+        default:
+            break;
+    }
+}
+
+void
+sc_input_manager_trigger_nav_bar_action(struct sc_input_manager *im,
+                                        const struct sc_nav_bar_action *action) {
+    if (im->disconnected || im->screen->paused) {
+        return;
+    }
+
+    switch (action->type) {
+        case SC_NAV_BAR_ACTION_INJECT_KEYCODE:
+            break;
+        case SC_NAV_BAR_ACTION_SCREEN_OFF:
+            if (im->controller && !im->camera) {
+                set_display_power(im, false);
+            }
+            break;
+        case SC_NAV_BAR_ACTION_SCREEN_ON:
+            if (im->controller && !im->camera) {
+                set_display_power(im, true);
+            }
+            break;
+        case SC_NAV_BAR_ACTION_ROTATE_DEVICE:
+            if (im->controller && !im->camera) {
+                rotate_device(im);
+            }
+            break;
+        case SC_NAV_BAR_ACTION_ROTATE_DISPLAY_LEFT:
+            if (im->screen->video) {
+                apply_orientation_transform(im, SC_ORIENTATION_270);
+            }
+            break;
+        case SC_NAV_BAR_ACTION_ROTATE_DISPLAY_RIGHT:
+            if (im->screen->video) {
+                apply_orientation_transform(im, SC_ORIENTATION_90);
+            }
+            break;
+    }
 }
 
 // turn the screen on if it was off, press BACK otherwise
@@ -748,6 +839,21 @@ sc_input_manager_get_position(struct sc_input_manager *im, int32_t x,
 static void
 sc_input_manager_process_mouse_motion(struct sc_input_manager *im,
                                       const SDL_MouseMotionEvent *event) {
+    if (sc_nav_bar_is_active(&im->screen->nav_bar)) {
+        struct sc_size window_size =
+            sc_sdl_get_window_size(im->screen->window);
+        int hovered = sc_nav_bar_hit_test(&im->screen->nav_bar, event->x,
+                                          event->y, window_size.width,
+                                          window_size.height,
+                                          &im->screen->rect);
+        if (sc_nav_bar_set_hovered(&im->screen->nav_bar, hovered)) {
+            sc_screen_redraw(im->screen);
+        }
+        if (hovered >= 0) {
+            return;
+        }
+    }
+
     if (im->camera || !im->mp || im->screen->paused || im->disconnected) {
         return;
     }
@@ -853,6 +959,39 @@ sc_input_manager_process_mouse_button(struct sc_input_manager *im,
     bool control = im->controller;
     bool paused = im->screen->paused;
     bool down = event->type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+
+    if (sc_nav_bar_is_active(&im->screen->nav_bar)) {
+        struct sc_size window_size =
+            sc_sdl_get_window_size(im->screen->window);
+        int button_index = sc_nav_bar_hit_test(&im->screen->nav_bar, event->x,
+                                               event->y, window_size.width,
+                                               window_size.height,
+                                               &im->screen->rect);
+        if (button_index >= 0) {
+            struct sc_nav_bar_action nav_action;
+            sc_nav_bar_get_action(button_index, &nav_action);
+
+            if (down) {
+                im->screen->nav_bar.pressed = button_index;
+                if (nav_action.type == SC_NAV_BAR_ACTION_INJECT_KEYCODE
+                        && control && !paused && im->kp) {
+                    sc_input_manager_inject_navigation_key(im,
+                            nav_action.keycode, SC_ACTION_DOWN);
+                }
+            } else if (im->screen->nav_bar.pressed == button_index) {
+                im->screen->nav_bar.pressed = -1;
+                if (nav_action.type == SC_NAV_BAR_ACTION_INJECT_KEYCODE
+                        && control && !paused && im->kp) {
+                    sc_input_manager_inject_navigation_key(im,
+                            nav_action.keycode, SC_ACTION_UP);
+                } else if (!paused) {
+                    sc_input_manager_trigger_nav_bar_action(im, &nav_action);
+                }
+            }
+            sc_screen_redraw(im->screen);
+            return;
+        }
+    }
 
     enum sc_mouse_button button = sc_mouse_button_from_sdl(event->button);
     if (button == SC_MOUSE_BUTTON_UNKNOWN) {

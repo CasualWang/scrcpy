@@ -226,6 +226,7 @@ scrcpy_otg(struct scrcpy_options *options) {
         .mipmaps = options->mipmaps,
         .fullscreen = false,
         .start_fps_counter = false,
+        .nav_bar = false,
     };
 
     ok = sc_screen_init(&s->screen, &params);

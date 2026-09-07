@@ -346,6 +346,7 @@ struct scrcpy_options {
     bool flex_display;
     bool ignore_video_encoder_constraints;
     bool update_terminal_title;
+    bool nav_bar;
 };
 
 extern const struct scrcpy_options scrcpy_options_default;

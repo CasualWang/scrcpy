@@ -17,6 +17,7 @@
 #include "frame_buffer.h"
 #include "input_manager.h"
 #include "mouse_capture.h"
+#include "nav_bar.h"
 #include "options.h"
 #include "texture.h"
 #include "trait/key_processor.h"
@@ -107,6 +108,8 @@ struct sc_screen {
         sc_tick time; // 0 means none
         struct sc_size size;
     } resize_tracker;
+
+    struct sc_nav_bar nav_bar;
 };
 
 struct sc_screen_params {
@@ -144,6 +147,7 @@ struct sc_screen_params {
 
     bool fullscreen;
     bool start_fps_counter;
+    bool nav_bar;
 };
 
 // initialize screen, create window, renderer and texture (window is hidden)
@@ -194,6 +198,10 @@ sc_screen_set_paused(struct sc_screen *screen, bool paused);
 // react to SDL events
 void
 sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event);
+
+// redraw the window contents
+void
+sc_screen_redraw(struct sc_screen *screen);
 
 // run the event loop once the device is disconnected
 void
