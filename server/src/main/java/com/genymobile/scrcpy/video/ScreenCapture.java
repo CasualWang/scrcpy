@@ -116,24 +116,38 @@ public class ScreenCapture extends SurfaceCapture {
             virtualDisplay = null;
         }
 
-        Size inputSize;
-        if (transform != null) {
-            // If there is a filter, it must receive the full display content
-            inputSize = displayInfo.getSize();
-            assert glRunner == null;
-            OpenGLFilter glFilter = new AffineOpenGLFilter(transform);
-            glRunner = new OpenGLRunner(glFilter);
-            surface = glRunner.start(inputSize, videoSize, surface);
-        } else {
-            // If there is no filter, the display must be rendered at target video size directly
-            inputSize = videoSize;
+        Surface encoderSurface = surface;
+        Size inputSize = (transform != null) ? displayInfo.getSize() : videoSize;
+
+        // DisplayManager.createVirtualDisplay with shell permissions is only supported since Android 10 (API 29).
+        // On older Android versions (API <= 28, including Android 7.0 and below), it always throws SecurityException.
+        boolean tryDisplayManager = Build.VERSION.SDK_INT >= AndroidVersions.API_29_ANDROID_10;
+
+        Exception displayManagerException = null;
+        if (tryDisplayManager) {
+            if (transform != null) {
+                assert glRunner == null;
+                OpenGLFilter glFilter = new AffineOpenGLFilter(transform);
+                glRunner = new OpenGLRunner(glFilter);
+                surface = glRunner.start(inputSize, videoSize, encoderSurface);
+            }
+
+            try {
+                virtualDisplay = ServiceManager.getDisplayManager()
+                        .createVirtualDisplay("scrcpy", inputSize.getWidth(), inputSize.getHeight(), displayId, surface);
+                Ln.d("Display: using DisplayManager API");
+            } catch (Exception e) {
+                displayManagerException = e;
+                Ln.w("Could not create display using DisplayManager, falling back to SurfaceControl", e);
+                if (glRunner != null) {
+                    glRunner.stopAndRelease();
+                    glRunner = null;
+                }
+                virtualDisplay = null;
+            }
         }
 
-        try {
-            virtualDisplay = ServiceManager.getDisplayManager()
-                    .createVirtualDisplay("scrcpy", inputSize.getWidth(), inputSize.getHeight(), displayId, surface);
-            Ln.d("Display: using DisplayManager API");
-        } catch (Exception displayManagerException) {
+        if (virtualDisplay == null) {
             if (Build.BRAND.equalsIgnoreCase("oculus") && Build.MODEL.toLowerCase(Locale.ROOT).startsWith("quest")) {
                 // Workaround for buggy createVirtualDisplay on Quest
                 try {
@@ -147,10 +161,26 @@ public class ScreenCapture extends SurfaceCapture {
 
                     Size deviceSize = displayInfo.getSize();
                     int layerStack = displayInfo.getLayerStack();
-                    setDisplaySurface(display, surface, deviceSize.toRect(), inputSize.toRect(), layerStack);
-                    Ln.d("Display: using SurfaceControl API");
+                    Rect layerStackRect = (crop != null) ? crop : deviceSize.toRect();
+
+                    if (canUseSurfaceControlNativeRotation()) {
+                        int videoRotation = computeVideoRotation();
+                        Size unlockedVideoSize = (videoRotation % 2 == 0) ? videoSize : videoSize.rotate();
+                        setDisplaySurface(display, encoderSurface, videoRotation, layerStackRect, unlockedVideoSize.toRect(), layerStack);
+                        Ln.d("Display: using SurfaceControl API with native rotation (" + videoRotation + ")");
+                    } else {
+                        if (transform != null && glRunner == null) {
+                            OpenGLFilter glFilter = new AffineOpenGLFilter(transform);
+                            glRunner = new OpenGLRunner(glFilter);
+                            surface = glRunner.start(inputSize, videoSize, encoderSurface);
+                        }
+                        setDisplaySurface(display, surface, 0, layerStackRect, inputSize.toRect(), layerStack);
+                        Ln.d("Display: using SurfaceControl API");
+                    }
                 } catch (Exception surfaceControlException) {
-                    Ln.e("Could not create display using DisplayManager", displayManagerException);
+                    if (displayManagerException != null) {
+                        Ln.e("Could not create display using DisplayManager", displayManagerException);
+                    }
                     Ln.e("Could not create display using SurfaceControl", surfaceControlException);
                     throw new AssertionError("Could not create display");
                 }
@@ -207,6 +237,21 @@ public class ScreenCapture extends SurfaceCapture {
         return true;
     }
 
+    private boolean canUseSurfaceControlNativeRotation() {
+        return !captureOrientation.isFlipped() && angle == 0;
+    }
+
+    private int computeVideoRotation() {
+        int displayRotation = displayInfo.getRotation();
+        boolean locked = captureOrientationLock != Orientation.Lock.Unlocked;
+        int targetRotation = captureOrientation.getRotation();
+        if (locked) {
+            return (displayRotation + 4 - targetRotation) % 4;
+        } else {
+            return (4 - targetRotation) % 4;
+        }
+    }
+
     private static IBinder createDisplay() throws Exception {
         // Since Android 12 (preview), secure displays could not be created with shell permissions anymore.
         // On Android 12 preview, SDK_INT is still R (not S), but CODENAME is "S".
@@ -215,11 +260,11 @@ public class ScreenCapture extends SurfaceCapture {
         return SurfaceControl.createDisplay("scrcpy", secure);
     }
 
-    private static void setDisplaySurface(IBinder display, Surface surface, Rect deviceRect, Rect displayRect, int layerStack) {
+    private static void setDisplaySurface(IBinder display, Surface surface, int orientation, Rect deviceRect, Rect displayRect, int layerStack) {
         SurfaceControl.openTransaction();
         try {
             SurfaceControl.setDisplaySurface(display, surface);
-            SurfaceControl.setDisplayProjection(display, 0, deviceRect, displayRect);
+            SurfaceControl.setDisplayProjection(display, orientation, deviceRect, displayRect);
             SurfaceControl.setDisplayLayerStack(display, layerStack);
         } finally {
             SurfaceControl.closeTransaction();

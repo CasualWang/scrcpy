@@ -27,5 +27,11 @@ echo "=== copy nav icons (portable) ==="
 mkdir -p build/app/nav
 cp -f app/data/nav/*.png build/app/nav/
 
+if [ -f server/build/outputs/apk/release/server-release-unsigned.apk ]; then
+    echo "=== copy scrcpy-server (portable) ==="
+    cp -f server/build/outputs/apk/release/server-release-unsigned.apk build/app/scrcpy-server
+fi
+
 echo "=== build output ==="
 ls -lh build/app/scrcpy.exe
+[ -f build/app/scrcpy-server ] && ls -lh build/app/scrcpy-server
