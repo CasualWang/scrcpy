@@ -8,3 +8,5 @@ build/
 /x/
 local.properties
 /scrcpy-server
+node_modules/
+package-lock.json

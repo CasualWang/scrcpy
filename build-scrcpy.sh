@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-export PATH="/mingw64/bin:/usr/bin:$PATH"
-export NINJA="/mingw64/bin/ninja.exe"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+export NINJA="${SCRIPT_DIR}/tools/ninja.bat"
 
-cd /f/AndroidProject/scrcpy
+cd "$SCRIPT_DIR"
 
 echo "=== tools check ==="
 which gcc meson ninja pkg-config
-ninja --version
+"$NINJA" --version
 
 NATIVE_FILE="--native-file=mingw64-native.ini"
 
@@ -21,7 +21,7 @@ else
 fi
 
 echo "=== ninja compile ==="
-/mingw64/bin/ninja -C build
+"$NINJA" -C build
 
 echo "=== copy nav icons (portable) ==="
 mkdir -p build/app/nav
