@@ -53,5 +53,10 @@ cp app/data/scrcpy.png "$WINXX_BUILD_DIR/dist/"
 cp app/data/disconnected.png "$WINXX_BUILD_DIR/dist/"
 cp app/data/open_a_terminal_here.bat "$WINXX_BUILD_DIR/dist/"
 cp LICENSE "$WINXX_BUILD_DIR/dist/LICENSE.txt"
+if [[ -d app/data/nav ]]; then
+    mkdir -p "$WINXX_BUILD_DIR/dist/nav"
+    cp app/data/nav/*.png "$WINXX_BUILD_DIR/dist/nav/" 2>/dev/null || true
+fi
 cp "$DEPS_INSTALL_DIR"/bin/*.dll "$WINXX_BUILD_DIR/dist/"
 cp -r "$ADB_INSTALL_DIR"/. "$WINXX_BUILD_DIR/dist/"
+
