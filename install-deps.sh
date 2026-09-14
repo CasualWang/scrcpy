@@ -11,7 +11,6 @@ pacman -Sy --noconfirm
 
 pacman -S --needed --noconfirm \
     mingw-w64-x86_64-sdl3 \
-    mingw-w64-x86_64-sdl3-ttf \
     mingw-w64-x86_64-ffmpeg \
     mingw-w64-x86_64-libusb \
     mingw-w64-x86_64-gcc \

@@ -61,9 +61,7 @@ struct sc_nav_bar {
     SDL_Renderer *renderer;
     SDL_Window *window;
     SDL_Texture *icons[SC_NAV_BAR_BTN_COUNT];
-    SDL_Texture *tooltip_textures[SC_NAV_BAR_BTN_COUNT];
-    float tooltip_w[SC_NAV_BAR_BTN_COUNT];
-    float tooltip_h[SC_NAV_BAR_BTN_COUNT];
+    char tooltip_texts[SC_NAV_BAR_BTN_COUNT][32];
 };
 
 bool

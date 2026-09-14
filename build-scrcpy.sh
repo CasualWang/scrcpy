@@ -23,15 +23,13 @@ fi
 echo "=== ninja compile ==="
 "$NINJA" -C build
 
-echo "=== copy nav icons & DLLs (portable) ==="
+echo "=== copy nav icons (portable) ==="
 mkdir -p build/app/nav
 cp -f app/data/nav/*.png build/app/nav/
-cp -f /mingw64/bin/SDL3_ttf.dll build/app/ 2>/dev/null || true
 
 if [ -d dist/scrcpy-win64 ]; then
     echo "=== sync to dist/scrcpy-win64 ==="
     cp -f build/app/scrcpy.exe dist/scrcpy-win64/
-    cp -f /mingw64/bin/SDL3_ttf.dll dist/scrcpy-win64/ 2>/dev/null || true
     mkdir -p dist/scrcpy-win64/nav
     cp -f app/data/nav/*.png dist/scrcpy-win64/nav/
 fi

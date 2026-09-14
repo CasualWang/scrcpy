@@ -18,7 +18,6 @@ src = [
     'src/events.c',
     'src/icon.c',
     'src/file_pusher.c',
-    'src/font.c',
     'src/fps_counter.c',
     'src/frame_buffer.c',
     'src/input_manager.c',
@@ -130,7 +129,6 @@ dependencies = [
     dependency('libavutil', static: static),
     dependency('libswresample', static: static),
     dependency('sdl3', version: '>= 3.2.0', static: static),
-    dependency('sdl3-ttf', static: static),
 ]
 
 if v4l2_support
