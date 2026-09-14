@@ -18,6 +18,7 @@ src = [
     'src/events.c',
     'src/icon.c',
     'src/file_pusher.c',
+    'src/font.c',
     'src/fps_counter.c',
     'src/frame_buffer.c',
     'src/input_manager.c',
@@ -129,6 +130,7 @@ dependencies = [
     dependency('libavutil', static: static),
     dependency('libswresample', static: static),
     dependency('sdl3', version: '>= 3.2.0', static: static),
+    dependency('sdl3-ttf', static: static),
 ]
 
 if v4l2_support
@@ -220,6 +222,8 @@ install_data('data/nav/nav_volume_down.png',
 install_data('data/nav/nav_screen_off.png',
              install_dir: datadir / 'scrcpy/nav')
 install_data('data/nav/nav_screen_on.png',
+             install_dir: datadir / 'scrcpy/nav')
+install_data('data/nav/nav_screenshot.png',
              install_dir: datadir / 'scrcpy/nav')
 install_data('data/nav/nav_rotate_device.png',
              install_dir: datadir / 'scrcpy/nav')

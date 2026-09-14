@@ -23,6 +23,7 @@ enum sc_nav_bar_button {
     SC_NAV_BAR_BTN_POWER,
     SC_NAV_BAR_BTN_SCREEN_OFF,
     SC_NAV_BAR_BTN_SCREEN_ON,
+    SC_NAV_BAR_BTN_SCREENSHOT,
     SC_NAV_BAR_BTN_VOLUME_UP,
     SC_NAV_BAR_BTN_VOLUME_DOWN,
     SC_NAV_BAR_BTN_ROTATE_DEVICE,
@@ -35,6 +36,7 @@ enum sc_nav_bar_action_type {
     SC_NAV_BAR_ACTION_INJECT_KEYCODE,
     SC_NAV_BAR_ACTION_SCREEN_OFF,
     SC_NAV_BAR_ACTION_SCREEN_ON,
+    SC_NAV_BAR_ACTION_SCREENSHOT,
     SC_NAV_BAR_ACTION_ROTATE_DEVICE,
     SC_NAV_BAR_ACTION_ROTATE_DISPLAY_LEFT,
     SC_NAV_BAR_ACTION_ROTATE_DISPLAY_RIGHT,
@@ -57,11 +59,16 @@ struct sc_nav_bar {
     int hovered;
     int pressed;
     SDL_Renderer *renderer;
+    SDL_Window *window;
     SDL_Texture *icons[SC_NAV_BAR_BTN_COUNT];
+    SDL_Texture *tooltip_textures[SC_NAV_BAR_BTN_COUNT];
+    float tooltip_w[SC_NAV_BAR_BTN_COUNT];
+    float tooltip_h[SC_NAV_BAR_BTN_COUNT];
 };
 
 bool
-sc_nav_bar_init(struct sc_nav_bar *bar, SDL_Renderer *renderer, bool enabled);
+sc_nav_bar_init(struct sc_nav_bar *bar, SDL_Window *window,
+                SDL_Renderer *renderer, bool enabled, uint8_t shortcut_mods);
 
 void
 sc_nav_bar_destroy(struct sc_nav_bar *bar);

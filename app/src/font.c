@@ -11,6 +11,7 @@
 #define SCRCPY_DEFAULT_FONT_DIR PREFIX "/share/scrcpy"
 #define SCRCPY_FONT_FILENAME "OpenSans-Regular.ttf"
 
+#ifndef _WIN32
 static char *
 try_path(const char *path) {
     if (!path || !sc_file_is_regular(path)) {
@@ -18,6 +19,7 @@ try_path(const char *path) {
     }
     return strdup(path);
 }
+#endif
 
 static char *
 get_system_font_path(void) {
@@ -25,6 +27,8 @@ get_system_font_path(void) {
     const char *windir = getenv("WINDIR");
     if (windir) {
         static const char *filenames[] = {
+            "Fonts\\msyh.ttc",
+            "Fonts\\msyh.ttf",
             "Fonts\\segoeui.ttf",
             "Fonts\\arial.ttf",
         };
@@ -38,6 +42,8 @@ get_system_font_path(void) {
     }
 #elif defined(__APPLE__)
     static const char *paths[] = {
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
         "/System/Library/Fonts/Supplemental/Arial.ttf",
         "/System/Library/Fonts/Helvetica.ttc",
         "/Library/Fonts/Arial.ttf",
@@ -50,6 +56,8 @@ get_system_font_path(void) {
     }
 #else
     static const char *paths[] = {
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",

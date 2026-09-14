@@ -179,6 +179,9 @@ sc_input_manager_trigger_nav_bar_action(struct sc_input_manager *im,
                 set_display_power(im, true);
             }
             break;
+        case SC_NAV_BAR_ACTION_SCREENSHOT:
+            sc_screen_capture_to_clipboard(im->screen);
+            break;
         case SC_NAV_BAR_ACTION_ROTATE_DEVICE:
             if (im->controller && !im->camera) {
                 rotate_device(im);
@@ -657,8 +660,14 @@ sc_input_manager_process_key(struct sc_input_manager *im,
                     }
                     return;
                 case SDLK_S:
-                    if (im->kp && !shift && !repeat && !paused) {
-                        action_app_switch(im, action);
+                    if (!repeat && !paused) {
+                        if (shift) {
+                            if (down) {
+                                sc_screen_capture_to_clipboard(im->screen);
+                            }
+                        } else if (im->kp) {
+                            action_app_switch(im, action);
+                        }
                     }
                     return;
                 case SDLK_M:

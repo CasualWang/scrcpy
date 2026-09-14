@@ -1,10 +1,31 @@
 #include "nav_bar.h"
 
 #include <assert.h>
+#include <stdio.h>
 #include <string.h>
 
+#include <SDL3_ttf/SDL_ttf.h>
+
+#include "font.h"
 #include "icon.h"
+#include "shortcut_mod.h"
 #include "util/log.h"
+
+
+static const char *const BUTTON_SHORTCUTS[SC_NAV_BAR_BTN_COUNT] = {
+    [SC_NAV_BAR_BTN_HOME] = "h",
+    [SC_NAV_BAR_BTN_BACK] = "b",
+    [SC_NAV_BAR_BTN_RECENTS] = "s",
+    [SC_NAV_BAR_BTN_POWER] = "p",
+    [SC_NAV_BAR_BTN_SCREEN_OFF] = "o",
+    [SC_NAV_BAR_BTN_SCREEN_ON] = "Shift+o",
+    [SC_NAV_BAR_BTN_SCREENSHOT] = "Shift+s",
+    [SC_NAV_BAR_BTN_VOLUME_UP] = "↑",
+    [SC_NAV_BAR_BTN_VOLUME_DOWN] = "↓",
+    [SC_NAV_BAR_BTN_ROTATE_DEVICE] = "r",
+    [SC_NAV_BAR_BTN_ROTATE_DISPLAY_LEFT] = "←",
+    [SC_NAV_BAR_BTN_ROTATE_DISPLAY_RIGHT] = "→",
+};
 
 static const char *const ICON_FILENAMES[SC_NAV_BAR_BTN_COUNT] = {
     [SC_NAV_BAR_BTN_HOME] = "nav/nav_home.png",
@@ -13,6 +34,7 @@ static const char *const ICON_FILENAMES[SC_NAV_BAR_BTN_COUNT] = {
     [SC_NAV_BAR_BTN_POWER] = "nav/nav_power.png",
     [SC_NAV_BAR_BTN_SCREEN_OFF] = "nav/nav_screen_off.png",
     [SC_NAV_BAR_BTN_SCREEN_ON] = "nav/nav_screen_on.png",
+    [SC_NAV_BAR_BTN_SCREENSHOT] = "nav/nav_screenshot.png",
     [SC_NAV_BAR_BTN_VOLUME_UP] = "nav/nav_volume_up.png",
     [SC_NAV_BAR_BTN_VOLUME_DOWN] = "nav/nav_volume_down.png",
     [SC_NAV_BAR_BTN_ROTATE_DEVICE] = "nav/nav_rotate_device.png",
@@ -42,6 +64,9 @@ static const struct sc_nav_bar_action BUTTON_ACTIONS[SC_NAV_BAR_BTN_COUNT] = {
     },
     [SC_NAV_BAR_BTN_SCREEN_ON] = {
         .type = SC_NAV_BAR_ACTION_SCREEN_ON,
+    },
+    [SC_NAV_BAR_BTN_SCREENSHOT] = {
+        .type = SC_NAV_BAR_ACTION_SCREENSHOT,
     },
     [SC_NAV_BAR_BTN_VOLUME_UP] = {
         .type = SC_NAV_BAR_ACTION_INJECT_KEYCODE,
@@ -141,14 +166,84 @@ sc_nav_bar_get_button_rect(const struct sc_nav_bar *bar, int button_index,
     (void) window_h;
 }
 
+static void
+load_tooltips(struct sc_nav_bar *bar, uint8_t shortcut_mods) {
+    if (!TTF_Init()) {
+        LOGW("Could not initialize SDL_ttf: %s", SDL_GetError());
+        return;
+    }
+
+    char *font_path = sc_font_get_path();
+    if (!font_path) {
+        LOGW("Could not find a font for tooltips");
+        TTF_Quit();
+        return;
+    }
+
+    TTF_Font *font = TTF_OpenFont(font_path, 13.f);
+    free(font_path);
+    if (!font) {
+        LOGW("Could not open font for tooltips: %s", SDL_GetError());
+        TTF_Quit();
+        return;
+    }
+
+    const char *mod_name = "Alt";
+    if (shortcut_mods & (SC_SHORTCUT_MOD_LCTRL | SC_SHORTCUT_MOD_RCTRL)) {
+        mod_name = "Ctrl";
+    } else if (shortcut_mods & (SC_SHORTCUT_MOD_LSUPER | SC_SHORTCUT_MOD_RSUPER)) {
+        mod_name = "Win";
+    }
+
+    SDL_Color text_color = { 240, 240, 240, 255 };
+
+    for (int i = 0; i < SC_NAV_BAR_BTN_COUNT; ++i) {
+        char text[64];
+        snprintf(text, sizeof(text), "%s+%s", mod_name, BUTTON_SHORTCUTS[i]);
+
+        SDL_Surface *surface =
+            TTF_RenderText_Blended(font, text, strlen(text), text_color);
+        if (!surface) {
+            LOGW("Could not render tooltip text '%s': %s", text, SDL_GetError());
+            continue;
+        }
+
+        bar->tooltip_textures[i] =
+            SDL_CreateTextureFromSurface(bar->renderer, surface);
+        if (bar->tooltip_textures[i]) {
+            bar->tooltip_w[i] = (float) surface->w;
+            bar->tooltip_h[i] = (float) surface->h;
+        }
+        SDL_DestroySurface(surface);
+    }
+
+    TTF_CloseFont(font);
+    TTF_Quit();
+}
+
+static void
+destroy_tooltips(struct sc_nav_bar *bar) {
+    for (int i = 0; i < SC_NAV_BAR_BTN_COUNT; ++i) {
+        if (bar->tooltip_textures[i]) {
+            SDL_DestroyTexture(bar->tooltip_textures[i]);
+            bar->tooltip_textures[i] = NULL;
+        }
+    }
+}
+
 bool
-sc_nav_bar_init(struct sc_nav_bar *bar, SDL_Renderer *renderer, bool enabled) {
+sc_nav_bar_init(struct sc_nav_bar *bar, SDL_Window *window,
+                SDL_Renderer *renderer, bool enabled, uint8_t shortcut_mods) {
     bar->enabled = enabled;
     bar->visible = enabled;
     bar->hovered = -1;
     bar->pressed = -1;
     bar->renderer = renderer;
+    bar->window = window;
     memset(bar->icons, 0, sizeof(bar->icons));
+    memset(bar->tooltip_textures, 0, sizeof(bar->tooltip_textures));
+    memset(bar->tooltip_w, 0, sizeof(bar->tooltip_w));
+    memset(bar->tooltip_h, 0, sizeof(bar->tooltip_h));
 
     if (!enabled) {
         return true;
@@ -158,12 +253,15 @@ sc_nav_bar_init(struct sc_nav_bar *bar, SDL_Renderer *renderer, bool enabled) {
         LOGW("Navigation bar icons could not be loaded");
     }
 
+    load_tooltips(bar, shortcut_mods);
+
     return true;
 }
 
 void
 sc_nav_bar_destroy(struct sc_nav_bar *bar) {
     destroy_icons(bar);
+    destroy_tooltips(bar);
 }
 
 void
@@ -227,6 +325,8 @@ sc_nav_bar_render(struct sc_nav_bar *bar, float window_w, float window_h,
     Uint8 icon_g = 255 - bg.g;
     Uint8 icon_b = 255 - bg.b;
 
+    Uint8 hl_val = bg.r < 128 ? 255 : 0;
+
     for (int i = 0; i < SC_NAV_BAR_BTN_COUNT; ++i) {
         if (!bar->icons[i]) {
             continue;
@@ -235,6 +335,19 @@ sc_nav_bar_render(struct sc_nav_bar *bar, float window_w, float window_h,
         SDL_FRect btn;
         sc_nav_bar_get_button_rect(bar, i, window_w, window_h, content_rect,
                                    &btn);
+
+        if (interactive && (bar->hovered == i || bar->pressed == i)) {
+            SDL_FRect btn_rect = {
+                .x = (btn.x + 2.f) * scale,
+                .y = (btn.y + 2.f) * scale,
+                .w = (btn.w - 4.f) * scale,
+                .h = (btn.h - 4.f) * scale,
+            };
+            Uint8 hl_alpha = bar->pressed == i ? 65 : 35;
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, hl_val, hl_val, hl_val, hl_alpha);
+            SDL_RenderFillRect(renderer, &btn_rect);
+        }
 
         float icon_x = btn.x + (btn.w - SC_NAV_ICON_SIZE) / 2.f;
         float icon_y = btn.y + (btn.h - SC_NAV_ICON_SIZE) / 2.f;
@@ -248,6 +361,63 @@ sc_nav_bar_render(struct sc_nav_bar *bar, float window_w, float window_h,
         SDL_SetTextureColorMod(bar->icons[i], icon_r, icon_g, icon_b);
         SDL_SetTextureAlphaMod(bar->icons[i], icon_alpha(bar, i, interactive));
         SDL_RenderTexture(renderer, bar->icons[i], NULL, &dst);
+    }
+
+    if (interactive && bar->hovered >= 0 && bar->hovered < SC_NAV_BAR_BTN_COUNT &&
+            bar->tooltip_textures[bar->hovered]) {
+        int idx = bar->hovered;
+        SDL_FRect btn;
+        sc_nav_bar_get_button_rect(bar, idx, window_w, window_h, content_rect,
+                                   &btn);
+
+        float tw = bar->tooltip_w[idx];
+        float th = bar->tooltip_h[idx];
+        float pad_x = 8.f;
+        float pad_y = 5.f;
+
+        float box_w = (tw + pad_x * 2.f) * scale;
+        float box_h = (th + pad_y * 2.f) * scale;
+        float box_x = (btn.x - 8.f) * scale - box_w;
+        float box_y = (btn.y + btn.h / 2.f) * scale - box_h / 2.f;
+
+        // Clamp within window bounds
+        if (box_y < 4.f * scale) {
+            box_y = 4.f * scale;
+        }
+        if (box_y + box_h > window_h * scale - 4.f * scale) {
+            box_y = window_h * scale - 4.f * scale - box_h;
+        }
+
+        SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+
+        // Border (1px)
+        SDL_FRect border_rect = {
+            .x = box_x,
+            .y = box_y,
+            .w = box_w,
+            .h = box_h,
+        };
+        SDL_SetRenderDrawColor(renderer, 75, 75, 75, 240);
+        SDL_RenderFillRect(renderer, &border_rect);
+
+        // Background
+        SDL_FRect inner_rect = {
+            .x = box_x + scale,
+            .y = box_y + scale,
+            .w = box_w - 2.f * scale,
+            .h = box_h - 2.f * scale,
+        };
+        SDL_SetRenderDrawColor(renderer, 28, 28, 28, 240);
+        SDL_RenderFillRect(renderer, &inner_rect);
+
+        // Text
+        SDL_FRect text_dst = {
+            .x = box_x + pad_x * scale,
+            .y = box_y + pad_y * scale,
+            .w = tw * scale,
+            .h = th * scale,
+        };
+        SDL_RenderTexture(renderer, bar->tooltip_textures[idx], NULL, &text_dst);
     }
 }
 

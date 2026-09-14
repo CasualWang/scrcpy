@@ -110,6 +110,8 @@ struct sc_screen {
     } resize_tracker;
 
     struct sc_nav_bar nav_bar;
+    bool pending_screenshot;
+    sc_tick flash_until;
 };
 
 struct sc_screen_params {
@@ -212,5 +214,8 @@ sc_screen_handle_disconnection(struct sc_screen *screen);
 struct sc_point
 sc_screen_convert_window_to_frame_coords(struct sc_screen *screen,
                                         int32_t x, int32_t y);
+
+void
+sc_screen_capture_to_clipboard(struct sc_screen *screen);
 
 #endif

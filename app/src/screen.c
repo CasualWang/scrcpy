@@ -10,6 +10,91 @@
 #include "util/log.h"
 #include "util/sdl.h"
 
+#ifdef _WIN32
+# define WIN32_LEAN_AND_MEAN
+# include <windows.h>
+
+static bool
+clipboard_set_image(SDL_Surface *surface) {
+    SDL_Surface *rgb_surface =
+        SDL_ConvertSurface(surface, SDL_PIXELFORMAT_BGR24);
+    if (!rgb_surface) {
+        LOGE("Could not convert surface to BGR24: %s", SDL_GetError());
+        return false;
+    }
+
+    int w = rgb_surface->w;
+    int h = rgb_surface->h;
+    int row_size = (w * 3 + 3) & ~3;
+    size_t dib_size = sizeof(BITMAPINFOHEADER) + (size_t) row_size * h;
+
+    HGLOBAL hmem = GlobalAlloc(GHND, dib_size);
+    if (!hmem) {
+        LOGE("Could not allocate global memory for clipboard DIB");
+        SDL_DestroySurface(rgb_surface);
+        return false;
+    }
+
+    void *mem = GlobalLock(hmem);
+    if (!mem) {
+        LOGE("Could not lock global memory for clipboard DIB");
+        GlobalFree(hmem);
+        SDL_DestroySurface(rgb_surface);
+        return false;
+    }
+
+    BITMAPINFOHEADER *bih = (BITMAPINFOHEADER *) mem;
+    bih->biSize = sizeof(BITMAPINFOHEADER);
+    bih->biWidth = w;
+    bih->biHeight = h;
+    bih->biPlanes = 1;
+    bih->biBitCount = 24;
+    bih->biCompression = BI_RGB;
+    bih->biSizeImage = row_size * h;
+    bih->biXPelsPerMeter = 0;
+    bih->biYPelsPerMeter = 0;
+    bih->biClrUsed = 0;
+    bih->biClrImportant = 0;
+
+    uint8_t *dst = (uint8_t *) mem + sizeof(BITMAPINFOHEADER);
+    const uint8_t *src = (const uint8_t *) rgb_surface->pixels;
+
+    for (int y = 0; y < h; ++y) {
+        const uint8_t *src_row = src + (h - 1 - y) * rgb_surface->pitch;
+        uint8_t *dst_row = dst + y * row_size;
+        memcpy(dst_row, src_row, w * 3);
+    }
+
+    GlobalUnlock(hmem);
+    SDL_DestroySurface(rgb_surface);
+
+    if (!OpenClipboard(NULL)) {
+        LOGE("Could not open clipboard");
+        GlobalFree(hmem);
+        return false;
+    }
+
+    EmptyClipboard();
+    HANDLE ret = SetClipboardData(CF_DIB, hmem);
+    CloseClipboard();
+
+    if (!ret) {
+        LOGE("Could not set clipboard data");
+        GlobalFree(hmem);
+        return false;
+    }
+
+    return true;
+}
+#else
+static bool
+clipboard_set_image(SDL_Surface *surface) {
+    (void) surface;
+    LOGW("Image clipboard is not supported on this platform");
+    return false;
+}
+#endif
+
 #define DISPLAY_MARGINS 96
 
 #define DOWNCAST(SINK) container_of(SINK, struct sc_screen, frame_sink)
@@ -260,6 +345,80 @@ sc_screen_update_content_rect(struct sc_screen *screen) {
                          screen->render_fit, nav_bar_width, &screen->rect);
 }
 
+static SDL_Surface *
+sc_screen_capture_full_resolution(struct sc_screen *screen) {
+    SDL_Renderer *renderer = screen->renderer;
+    SDL_Texture *texture = screen->tex.texture;
+    if (!renderer || !texture) {
+        return NULL;
+    }
+
+    uint32_t w = screen->content_size.width;
+    uint32_t h = screen->content_size.height;
+    if (!w || !h) {
+        return NULL;
+    }
+
+    SDL_Texture *target = SDL_CreateTexture(renderer, SDL_PIXELFORMAT_RGBA32,
+                                            SDL_TEXTUREACCESS_TARGET, w, h);
+    if (!target) {
+        LOGW("Could not create target texture for screenshot: %s",
+             SDL_GetError());
+        return NULL;
+    }
+
+    if (!SDL_SetRenderTarget(renderer, target)) {
+        LOGW("Could not set render target: %s", SDL_GetError());
+        SDL_DestroyTexture(target);
+        return NULL;
+    }
+
+    SDL_SetRenderDrawColor(renderer, 0, 0, 0, 255);
+    SDL_RenderClear(renderer);
+
+    SDL_FRect geometry = {
+        .x = 0,
+        .y = 0,
+        .w = (float) w,
+        .h = (float) h,
+    };
+    enum sc_orientation orientation = screen->orientation;
+
+    if (orientation == SC_ORIENTATION_0) {
+        SDL_RenderTexture(renderer, texture, NULL, &geometry);
+    } else {
+        unsigned cw_rotation = sc_orientation_get_rotation(orientation);
+        double angle = 90.0 * cw_rotation;
+
+        SDL_FRect *dstrect = NULL;
+        SDL_FRect rect;
+        if (sc_orientation_is_swap(orientation)) {
+            rect.x = geometry.x + (geometry.w - geometry.h) / 2.f;
+            rect.y = geometry.y + (geometry.h - geometry.w) / 2.f;
+            rect.w = geometry.h;
+            rect.h = geometry.w;
+            dstrect = &rect;
+        } else {
+            dstrect = &geometry;
+        }
+
+        SDL_FlipMode flip = sc_orientation_is_mirror(orientation)
+                              ? SDL_FLIP_HORIZONTAL : 0;
+        SDL_RenderTextureRotated(renderer, texture, NULL, dstrect, angle,
+                                 NULL, flip);
+    }
+
+    SDL_Surface *surface = SDL_RenderReadPixels(renderer, NULL);
+    if (!surface) {
+        LOGE("Could not read pixels from target texture: %s", SDL_GetError());
+    }
+
+    SDL_SetRenderTarget(renderer, NULL);
+    SDL_DestroyTexture(target);
+
+    return surface;
+}
+
 // render the texture to the renderer
 //
 // Set the update_content_rect flag if the window or content size may have
@@ -332,6 +491,45 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
 
     if (!ok) {
         LOGE("Could not render texture: %s", SDL_GetError());
+    }
+
+    if (screen->pending_screenshot) {
+        screen->pending_screenshot = false;
+        SDL_Surface *surface = sc_screen_capture_full_resolution(screen);
+        if (!surface) {
+            // Fallback to reading current window backbuffer
+            SDL_Rect src_rect = {
+                .x = (int) geometry.x,
+                .y = (int) geometry.y,
+                .w = (int) geometry.w,
+                .h = (int) geometry.h,
+            };
+            if (src_rect.w > 0 && src_rect.h > 0) {
+                surface = SDL_RenderReadPixels(renderer, &src_rect);
+            }
+        }
+
+        if (surface) {
+            if (clipboard_set_image(surface)) {
+                LOGI("Screenshot copied to clipboard (%dx%d)",
+                     surface->w, surface->h);
+                screen->flash_until = sc_tick_now() + SC_TICK_FROM_MS(80);
+            }
+            SDL_DestroySurface(surface);
+        } else {
+            LOGE("Could not capture screenshot: %s", SDL_GetError());
+        }
+    }
+
+    if (screen->flash_until) {
+        sc_tick now = sc_tick_now();
+        if (now < screen->flash_until) {
+            SDL_SetRenderDrawBlendMode(renderer, SDL_BLENDMODE_BLEND);
+            SDL_SetRenderDrawColor(renderer, 255, 255, 255, 180);
+            SDL_RenderFillRect(renderer, &geometry);
+        } else {
+            screen->flash_until = 0;
+        }
     }
 
     struct sc_size window_size = sc_sdl_get_window_size(screen->window);
@@ -710,9 +908,13 @@ sc_screen_init(struct sc_screen *screen,
     sc_input_manager_init(&screen->im, &im_params);
 
     bool nav_bar = params->nav_bar && params->controller && params->video;
-    if (!sc_nav_bar_init(&screen->nav_bar, screen->renderer, nav_bar)) {
+    if (!sc_nav_bar_init(&screen->nav_bar, screen->window, screen->renderer,
+                         nav_bar, params->shortcut_mods)) {
         goto error_destroy_texture;
     }
+
+    screen->pending_screenshot = false;
+    screen->flash_until = 0;
 
     // Initialize even if not used for simplicity
     sc_mouse_capture_init(&screen->mc, screen->window, params->shortcut_mods);
@@ -1233,6 +1435,19 @@ sc_screen_handle_event(struct sc_screen *screen, const SDL_Event *event) {
         case SDL_EVENT_WINDOW_EXPOSED:
             sc_screen_render(screen, true);
             return;
+        case SC_EVENT_SCREEN_FLASH_TIMEOUT:
+            if (screen->window_shown) {
+                screen->flash_until = 0;
+                sc_screen_render(screen, false);
+            }
+            return;
+        case SDL_EVENT_WINDOW_MOUSE_LEAVE:
+            if (sc_nav_bar_is_active(&screen->nav_bar)) {
+                if (sc_nav_bar_set_hovered(&screen->nav_bar, -1)) {
+                    sc_screen_redraw(screen);
+                }
+            }
+            return;
 // If defined, then the actions are already performed by the event watcher
 #ifndef CONTINUOUS_RESIZING_WORKAROUND
         case SDL_EVENT_WINDOW_RESIZED:
@@ -1402,4 +1617,27 @@ sc_screen_convert_window_to_frame_coords(struct sc_screen *screen,
     }
 
     return result;
+}
+
+static Uint32 SDLCALL
+flash_timer_cb(void *userdata, SDL_TimerID timer_id, Uint32 interval) {
+    (void) timer_id;
+    (void) interval;
+    (void) userdata;
+    sc_push_event(SC_EVENT_SCREEN_FLASH_TIMEOUT);
+    return 0;
+}
+
+void
+sc_screen_capture_to_clipboard(struct sc_screen *screen) {
+    if (!screen->video || !screen->window_shown || !screen->renderer
+            || screen->disconnected || !screen->tex.texture) {
+        LOGW("Cannot capture screenshot: screen not ready");
+        return;
+    }
+
+    screen->pending_screenshot = true;
+    sc_screen_render(screen, false);
+
+    SDL_AddTimer(80, flash_timer_cb, screen);
 }

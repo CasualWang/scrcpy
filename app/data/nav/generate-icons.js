@@ -12,6 +12,7 @@ const {
     SunOne,
     ScreenRotation,
     ReverseRotation,
+    Screenshot,
 } = require('@icon-park/svg');
 
 const ICONS = [
@@ -21,6 +22,7 @@ const ICONS = [
     ['nav_power.png', Power],
     ['nav_screen_off.png', Moon],
     ['nav_screen_on.png', SunOne],
+    ['nav_screenshot.png', Screenshot],
     ['nav_volume_up.png', VolumeUp],
     ['nav_volume_down.png', VolumeDown],
     ['nav_rotate_device.png', ScreenRotation],
