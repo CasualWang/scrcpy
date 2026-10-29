@@ -261,6 +261,28 @@ sc_screen_track_resize(struct sc_screen *screen, struct sc_size size) {
     screen->resize_tracker.size = size;
 }
 
+static bool
+sc_screen_set_texture_from_surface(struct sc_screen *screen,
+                                   SDL_Surface *surface) {
+    // The current "frame" texture can be discarded
+    sc_texture_reset(&screen->tex);
+
+    if (screen->icon_tex) {
+        SDL_DestroyTexture(screen->icon_tex);
+    }
+
+    screen->icon_tex = SDL_CreateTextureFromSurface(screen->renderer, surface);
+    if (!screen->icon_tex) {
+        LOGE("Could not create texture from surface: %s", SDL_GetError());
+        return false;
+    }
+
+    // Once is_icon_active is true, it may never become false again
+    screen->is_icon_active = true;
+
+    return true;
+}
+
 static inline bool
 sc_screen_is_relative_mode(struct sc_screen *screen) {
     // screen->im.mp may be NULL if --no-control
@@ -274,6 +296,7 @@ compute_content_rect(struct sc_size window_size, struct sc_size content_size,
     if (nav_bar_width && window_size.width > nav_bar_width) {
         window_size.width -= nav_bar_width;
     }
+    // Only upscale video frames, not icon
     if (is_icon) {
         if (content_size.width <= window_size.width
                 && content_size.height <= window_size.height) {
@@ -336,19 +359,19 @@ compute_content_rect(struct sc_size window_size, struct sc_size content_size,
 
 static void
 sc_screen_update_content_rect(struct sc_screen *screen) {
-    // Only upscale video frames, not icon
-    bool is_icon = !screen->video || screen->disconnected;
-
     struct sc_size window_size = sc_sdl_get_window_size(screen->window);
     uint16_t nav_bar_width = sc_nav_bar_get_width(&screen->nav_bar);
-    compute_content_rect(window_size, screen->content_size, is_icon,
-                         screen->render_fit, nav_bar_width, &screen->rect);
+    compute_content_rect(window_size, screen->content_size,
+                         screen->is_icon_active, screen->render_fit,
+                         nav_bar_width, &screen->rect);
 }
 
 static SDL_Surface *
 sc_screen_capture_full_resolution(struct sc_screen *screen) {
     SDL_Renderer *renderer = screen->renderer;
-    SDL_Texture *texture = screen->tex.texture;
+    SDL_Texture *texture = screen->is_icon_active
+                         ? screen->icon_tex
+                         : sc_texture_get(&screen->tex);
     if (!renderer || !texture) {
         return NULL;
     }
@@ -436,7 +459,9 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     SDL_SetRenderDrawColor(renderer, bg.r, bg.g, bg.b, 0);
     sc_sdl_render_clear(renderer);
 
-    SDL_Texture *texture = screen->tex.texture;
+    SDL_Texture *texture = screen->is_icon_active
+                         ? screen->icon_tex
+                         : sc_texture_get(&screen->tex);
     if (!texture) {
         goto end;
     }
@@ -457,12 +482,23 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
     };
     enum sc_orientation orientation = screen->orientation;
 
+    const SDL_FRect *srcrect = NULL;
+    SDL_FRect frame_rect;
+    if (!screen->is_icon_active) {
+        struct sc_size frame_size = sc_texture_get_frame_size(&screen->tex);
+        frame_rect.x = 0;
+        frame_rect.y = 0;
+        frame_rect.w = frame_size.width;
+        frame_rect.h = frame_size.height;
+        srcrect = &frame_rect;
+    }
+
     bool ok = false;
     if (orientation == SC_ORIENTATION_0) {
         // always align to a physical pixel
         geometry.x = (int32_t) geometry.x;
         geometry.y = (int32_t) geometry.y;
-        ok = SDL_RenderTexture(renderer, texture, NULL, &geometry);
+        ok = SDL_RenderTexture(renderer, texture, srcrect, &geometry);
     } else {
         unsigned cw_rotation = sc_orientation_get_rotation(orientation);
         double angle = 90 * cw_rotation;
@@ -485,8 +521,8 @@ sc_screen_render(struct sc_screen *screen, bool update_content_rect) {
         // always align to a physical pixel
         dstrect->x = (int32_t) dstrect->x;
         dstrect->y = (int32_t) dstrect->y;
-        ok = SDL_RenderTextureRotated(renderer, texture, NULL, dstrect, angle,
-                                      NULL, flip);
+        ok = SDL_RenderTextureRotated(renderer, texture, srcrect, dstrect,
+                                      angle, NULL, flip);
     }
 
     if (!ok) {
@@ -680,7 +716,7 @@ sc_screen_frame_sink_close(struct sc_frame_sink *sink) {
     // nothing to do, the screen lifecycle is not managed by the frame producer
 }
 
-static bool
+static enum sc_sink_result
 sc_screen_frame_sink_push(struct sc_frame_sink *sink, const AVFrame *frame) {
     struct sc_screen *screen = DOWNCAST(sink);
     assert(screen->video);
@@ -691,7 +727,7 @@ sc_screen_frame_sink_push(struct sc_frame_sink *sink, const AVFrame *frame) {
     screen->prevent_auto_resize = screen->current_session.video.client_resized;
     sc_mutex_unlock(&screen->mutex);
     if (!ok) {
-        return false;
+        return SC_SINK_KO;
     }
 
     if (previous_skipped) {
@@ -702,19 +738,19 @@ sc_screen_frame_sink_push(struct sc_frame_sink *sink, const AVFrame *frame) {
         // Post the event on the UI thread
         bool ok = sc_push_event(SC_EVENT_NEW_FRAME);
         if (!ok) {
-            return false;
+            return SC_SINK_KO;
         }
     }
 
-    return true;
+    return SC_SINK_OK;
 }
 
-static bool
+static enum sc_sink_result
 sc_screen_frame_sink_push_session(struct sc_frame_sink *sink,
                                   const struct sc_stream_session *session) {
     struct sc_screen *screen = DOWNCAST(sink);
     screen->current_session = *session;
-    return true;
+    return SC_SINK_OK;
 }
 
 bool
@@ -846,8 +882,9 @@ sc_screen_init(struct sc_screen *screen,
     }
 #endif
 
-    bool mipmaps = params->video;
-    ok = sc_texture_init(&screen->tex, screen->renderer, mipmaps);
+    bool mipmaps = params->video && params->mipmaps;
+    ok = sc_texture_init(&screen->tex, screen->renderer, mipmaps,
+                         params->hwdec_mode);
     if (!ok) {
         goto error_destroy_renderer;
     }
@@ -858,6 +895,8 @@ sc_screen_init(struct sc_screen *screen,
         goto error_destroy_texture;
     }
 
+    screen->icon_tex = NULL;
+    screen->is_icon_active = false;
     SDL_Surface *icon = sc_icon_load(SC_ICON_FILENAME_SCRCPY);
     if (icon) {
         if (!SDL_SetWindowIcon(screen->window, icon)) {
@@ -867,7 +906,7 @@ sc_screen_init(struct sc_screen *screen,
         if (!params->video) {
             screen->content_size.width = icon->w;
             screen->content_size.height = icon->h;
-            ok = sc_texture_set_from_surface(&screen->tex, icon);
+            ok = sc_screen_set_texture_from_surface(screen, icon);
             if (!ok) {
                 LOGE("Could not set icon: %s", SDL_GetError());
             }
@@ -1208,7 +1247,7 @@ sc_screen_apply_frame(struct sc_screen *screen, bool can_resize) {
         sc_screen_update_content_rect(screen);
     }
 
-    bool ok = sc_texture_set_from_frame(&screen->tex, frame);
+    bool ok = sc_texture_update(&screen->tex, frame);
     if (!ok) {
         return false;
     }
@@ -1536,8 +1575,8 @@ sc_screen_handle_disconnection(struct sc_screen *screen) {
                 SDL_Surface *icon_disconnected = event.user.data1;
                 assert(icon_disconnected);
 
-                bool ok = sc_texture_set_from_surface(&screen->tex,
-                                                      icon_disconnected);
+                bool ok = sc_screen_set_texture_from_surface(screen,
+                                                             icon_disconnected);
                 if (ok) {
                     screen->content_size.width = icon_disconnected->w;
                     screen->content_size.height = icon_disconnected->h;
@@ -1631,7 +1670,7 @@ flash_timer_cb(void *userdata, SDL_TimerID timer_id, Uint32 interval) {
 void
 sc_screen_capture_to_clipboard(struct sc_screen *screen) {
     if (!screen->video || !screen->window_shown || !screen->renderer
-            || screen->disconnected || !screen->tex.texture) {
+            || screen->disconnected || !sc_texture_get(&screen->tex)) {
         LOGW("Cannot capture screenshot: screen not ready");
         return;
     }
